@@ -1,0 +1,192 @@
+# 1. Gerekli Kutuphaneler
+library(shiny)
+library(ggplot2)
+library(corrplot)
+library(caret)
+library(readxl)
+library(xgboost)
+library(DT)
+library(pROC)
+library(dplyr)
+library(randomForest)
+library(htmltools)
+library(rsconnect)
+library(httpuv)
+library(rmarkdown)
+library(knitr)
+library(jsonlite)
+library(RJSONIO)
+library(reticulate)
+# 2. Veri Setini Y??kleme
+credit_data <- read.csv("credit.csv")
+
+credit_data <- na.omit(credit_data)
+# Eksik degerleri kontrol et
+sum(is.na(credit_data))
+
+# Kategorik degiskenleri degistirme
+credit_data$SEX <- factor(credit_data$SEX, levels = c(1, 2), labels = c("Male", "Female"))
+credit_data$EDUCATION <- factor(credit_data$EDUCATION, levels = c(1, 2, 3, 4), labels = c("Graduate", "University", "High School", "Others"))
+credit_data$MARRIAGE <- factor(credit_data$MARRIAGE, levels = c(1, 2, 3), labels = c("Married", "Single", "Others"))
+
+# Aykırı Degerleri Temizleme
+credit_data <- credit_data %>% filter(AGE >= 18 & AGE <= 80)
+
+# Yas ve Kredi Limiti Dagilimi
+ggplot(credit_data, aes(x = AGE, y = LIMIT_BAL)) + 
+  geom_point(alpha = 0.5) + 
+  labs(title = "Age and Credit Limit Distribution", x = "Age", y = "Credit Limit") +
+  theme_minimal()
+
+# 3. Kesifsel Veri Analizi (EDA)
+# Korelasyon Matrisi
+numeric_data <- credit_data %>% select(where(is.numeric))
+cor_matrix <- cor(numeric_data, use = "complete.obs")
+corrplot(cor_matrix, title = "Correlation Matrix", method = "circle")
+
+# Boxplot ve Histogram
+boxplot(credit_data$LIMIT_BAL, main="Credit Limit Boxplot", col="lightblue")
+hist(credit_data$AGE, main="Age Distribution", col="gray", breaks=20)
+
+#Eksik Verileri Temizleme ve Model Egitimi (Lojistik Regresyon)
+credit_data <- na.omit(credit_data)
+model_logit <- glm(NONPAY ~ LIMIT_BAL + SEX + EDUCATION + MARRIAGE + 
+                     AGE + PAY_0 + PAY_2 + PAY_3 + PAY_4 + PAY_5 + PAY_6,
+                   data = credit_data, family = binomial())
+summary(model_logit)
+
+
+# 5. Model Degerlendirme
+credit_data$predicted_prob <- predict(model_logit, type = "response")
+credit_data$predicted_class <- ifelse(credit_data$predicted_prob > 0.5, 1, 0)
+conf_matrix <- confusionMatrix(factor(credit_data$predicted_class), 
+                               factor(credit_data$NONPAY))
+print(conf_matrix)
+
+# Confusion Matrix Gorsellestirme
+tab <- as.table(conf_matrix$table)
+conf_matrix_df <- as.data.frame(tab)
+colnames(conf_matrix_df) <- c("Real", "Predict", "Frequency")
+
+ggplot(conf_matrix_df, aes(x = Predict, y = Real, fill = Frequency)) +
+  geom_tile() +
+  geom_text(aes(label = Frequency), color = "white", size = 5) +
+  scale_fill_gradient(low = "orange", high = "black") +
+  labs(x = "Predict", y = "Real", title = "Confusion Matrix") +
+  theme_minimal()
+
+# ROC-AUC
+roc_curve <- roc(credit_data$NONPAY, credit_data$predicted_prob)
+auc_value <- auc(roc_curve)
+print(paste("AUC Value:", auc_value))
+plot(roc_curve, col = "blue", main = "ROC Curve")
+legend("bottomright", legend=paste("AUC:",round(auc_value, 4)),
+       col="red", text.col = "red", cex = 1.5,bty = "n")
+
+# Feature Importance
+importance <- abs(coef(model_logit)[-1])
+importance_df <- data.frame(Feature = names(importance), 
+                            Importance = importance) %>% arrange(desc(Importance))
+ggplot(importance_df, aes(x = reorder(Feature, Importance), y = Importance)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Feature Importance", x = "Feature", y = "Importance") +
+  theme_minimal()  +
+  geom_text(aes(label = paste0(round(Importance / sum(Importance) * 100, 1), "%")), 
+            hjust = -0.2, color = "black", size = 3)
+
+# 7. Yeni Veri ile Tahmin Yapma
+
+yeni_musteri <- data.frame(
+  LIMIT_BAL = 100000,
+  SEX = "Male",
+  EDUCATION = "High School",
+  MARRIAGE = "Single",
+  AGE = 35,
+  PAY_0 = 0,
+  PAY_2 = 0,
+  PAY_3 = 0,
+  PAY_4 = 0,
+  PAY_5 = 0,
+  PAY_6 = 0)
+
+yeni_tahmin <- predict(model_logit, newdata = yeni_musteri, type = "response")
+yeni_tahmin
+
+
+
+
+model_logit <- glm(NONPAY ~ LIMIT_BAL + SEX + EDUCATION + MARRIAGE + AGE + PAY_0 + PAY_2 + PAY_3 + PAY_4 + PAY_5 + PAY_6,
+                   data = credit_data, family = binomial())
+
+
+# 6. Shiny Uygulamas??
+ui <- fluidPage(
+  titlePanel("Credit Risk Ratio - BeRmAN"),
+  
+  sidebarLayout(
+    sidebarPanel(
+      numericInput("limit_bal", "Credit Limit (min:10.000, max:1.000.000)", value = 100000, min = 10000, max = 1000000, step = 5000),
+      selectInput("sex", "Gender:", choices = c("Male", "Female")),
+      selectInput("education", "Education:", choices = c("Graduate", "University", "High School", "Others")),
+      selectInput("marriage", "Martial Status:", choices = c("Married", "Single", "Others")),
+      numericInput("age", "Age:", value = 35, min = 18, max = 80, step = 1),
+      numericInput("pay_0", "Last Month Past Due Payment Status (No-paid:1, Paid:0):", value = 0, min = -2, max = 8, step = 1),
+      numericInput("pay_2", "Last 2 Months Past Due Payment Status (No-paid:1, Paid:0):", value = 0, min = -2, max = 8, step = 1),
+      numericInput("pay_3", "Last 3 Months Past Due Payment Status (No-paid:1, Paid:0):", value = 0, min = -2, max = 8, step = 1),
+      actionButton("predict", "Calculate")
+    ),
+    
+    mainPanel(
+      textOutput("prediction_text"),
+      plotOutput("roc_plot")
+    )
+  )
+)
+
+#Sunucu
+server <- function(input, output) {
+  prediction <- reactive({
+    input$predict
+    
+    isolate({
+      new_data <- data.frame(
+        LIMIT_BAL = input$limit_bal,
+        SEX = factor(input$sex, levels = c("Male", "Female")),
+        EDUCATION = factor(input$education, levels = c("Graduate", "University", "High School", "Others")),
+        MARRIAGE = factor(input$marriage, levels = c("Married", "Single", "Others")),
+        AGE = input$age,
+        PAY_0 = input$pay_0,
+        PAY_2 = input$pay_2,
+        PAY_3 = input$pay_3,
+        PAY_4 = 0,  # Sabit Deger
+        PAY_5 = 0,  # Sabit Deger
+        PAY_6 = 0   # Sabit Deger
+      )
+      
+      pred_prob <- predict(model_logit, newdata = new_data, type = "response")
+      pred_prob
+    })
+  })
+  
+  output$prediction_text <- renderText({
+    risk <- prediction()
+    paste0("Non-payment Risk: %", round(risk * 100, 2))
+  })
+  
+  output$prediction <- renderText({
+    paste("Predicted Risk of Default:", risk_percentage, "%")
+  })
+  
+  output$roc_plot <- renderPlot({
+    roc_curve <- roc(credit_data$NONPAY, predict(model_logit, type = "response"))
+    plot(roc_curve, col = "red", main = "ROC Curve")
+    auc(roc_curve)
+  })
+}
+
+
+shinyApp(ui = ui, server = server)
+
+
+
