@@ -1,3 +1,6 @@
+DataSet: https://archive.ics.uci.edu/ml/datasets/default+of+credit+card+clients
+30.000 Kişinin Verisi ile Yapılmıştır.
+
 1.	📌 Veri Temizleme ve Ön İşleme (Data Preprocessing)
 ✅ Eksik veri doldurma (missing value imputation) işlemleri yapıldı.
 ✅ Kategorik değişkenleri one-hot encoding veya label encoding ile dönüştürdük.
